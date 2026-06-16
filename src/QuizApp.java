@@ -6,6 +6,11 @@ import java.util.ArrayList;
 import java.awt.datatransfer.*;
 import java.awt.Toolkit;
 
+import com.sun.net.httpserver.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+
 class Question {
     String mondai, kaisetsu, seikai;
     Question(String mondai, String kaisetsu, String seikai) {
@@ -19,8 +24,44 @@ public class QuizApp {
     static List<Question> questionList;
     static int currentIndex = 0;
     static JLabel statusLabel = new JLabel();
+    static int lastInsertedId = -1;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
+        //----------------------------
+        System.out.println("サーバー起動中...");
+        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        server.createContext("/add", exchange -> {
+            // Chromeから送られてきたデータ(JSON)を読み取る
+            byte[] bytes = exchange.getRequestBody().readAllBytes();
+            String json = new String(bytes);
+
+            // 簡易的に「選択したテキスト」だけを抽出するロジック
+            String text = json.split("\"text\":\"")[1].split("\"}")[0];
+            String type = json.split("\"type\":\"")[1].split("\"")[0];
+
+            //---------------------------------------
+            if ("regMondai".equals(type)) {
+                lastInsertedId = insertMondai(text); // ここでIDを保存！
+                showAutoClosingDialog("問題をセットしました");
+            } else {
+                updateKaisetsu(lastInsertedId, text); // 覚えていたIDを更新！
+                questionList = getAllQuestions(); // DB更新後に再読み込み
+                showAutoClosingDialog("解説を保存しました！");
+            }
+            //-------------------------------
+
+            String response = "OK";
+            exchange.sendResponseHeaders(200, response.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(response.getBytes());
+            }
+        });
+
+
+        //-----------------------------------
+        server.start();
+
+        //-------------------------
         questionList = getAllQuestions();
         createFloatingPalette();
 
@@ -33,6 +74,15 @@ public class QuizApp {
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setVisible(true);
     }
+
+    public static void deleteCurrentQuestion(int id) {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:C:/Users/user/Desktop/unko.db")) {
+            PreparedStatement pstmt = conn.prepareStatement("DELETE FROM unko WHERE id = ?");
+            pstmt.setInt(1, id);
+            pstmt.executeUpdate();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
 
     // --- 通知用メソッド（0.5秒で自動消去） ---
     public static void showAutoClosingDialog(String message) {
@@ -89,18 +139,28 @@ public class QuizApp {
 
     // --- 試験モード ---
     public static JPanel createQuizPanel(JFrame frame) {
-        JPanel panel = new JPanel(new BorderLayout());
+        JPanel panel = new JPanel(new BorderLayout(50,5));
+        panel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+
         JTextArea area = new JTextArea();
         area.setEditable(false);
         area.setLineWrap(true);
-        area.setFont(new Font("MS Gothic", Font.PLAIN, 20));
-        area.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        area.setFont(new Font("Yu Gothic", Font.PLAIN, 21));
+        //------------------------------------------
+        area.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(200, 200, 200)), // 薄い枠線
+                BorderFactory.createEmptyBorder(12, 15, 15, 15)           // 中に余白
+        ));
 
-        JTextArea kaisetsuArea = new JTextArea(5, 20);
+        //-----------------------------
+        JTextArea kaisetsuArea = new JTextArea(5, 19);
         kaisetsuArea.setEditable(false);
         kaisetsuArea.setLineWrap(true);
-        kaisetsuArea.setBackground(new Color(240, 240, 240));
+        kaisetsuArea.setBackground(new Color(255, 255, 255));
         kaisetsuArea.setBorder(BorderFactory.createTitledBorder("解説"));
+
+        // ★ここを追加：フォントサイズを今の1.5倍にする（今のフォントサイズが20なら30に設定）
+        kaisetsuArea.setFont(new Font("Yu Gothic", Font.PLAIN, 20));
 
         Runnable updateText = () -> {
             if (!questionList.isEmpty()) {
@@ -116,16 +176,17 @@ public class QuizApp {
         JButton prevBtn = new JButton("戻る");
         JButton nextBtn = new JButton("次へ");
 
+
         btn1.addActionListener(e -> {
             Question q = questionList.get(currentIndex);
             if ("〇".equals(q.seikai)) kaisetsuArea.setText("正解！その調子！");
-            else kaisetsuArea.setText("不正解！正解は「" + q.seikai + "」です。\n解説: " + q.kaisetsu);
+            else kaisetsuArea.setText("不正解！ \n解説: " + q.kaisetsu);//正解は「" + q.seikai + "」です。
         });
 
         btn2.addActionListener(e -> {
             Question q = questionList.get(currentIndex);
             if ("✖".equals(q.seikai)) kaisetsuArea.setText("正解！その調子！");
-            else kaisetsuArea.setText("不正解！正解は「" + q.seikai + "」です。\n解説: " + q.kaisetsu);
+            else kaisetsuArea.setText("不正解！ \n解説: " + q.kaisetsu);//正解は「" + q.seikai + "」です。
         });
 
         prevBtn.addActionListener(e -> { if (currentIndex > 0) { currentIndex--; updateText.run(); } });
@@ -178,4 +239,26 @@ public class QuizApp {
             pstmt.executeUpdate();
         } catch (SQLException e) { e.printStackTrace(); }
     }
+    public static int insertMondai(String m) {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:C:/Users/user/Desktop/unko.db")) {
+            // 問題だけINSERT
+            PreparedStatement pstmt = conn.prepareStatement("INSERT INTO unko (MONDAI, KAISETU, SEIKAI) VALUES (?, '', '〇')", Statement.RETURN_GENERATED_KEYS);
+            pstmt.setString(1, m);
+            pstmt.executeUpdate();
+
+            // 最後に作成されたIDを取得
+            ResultSet rs = pstmt.getGeneratedKeys();
+            if (rs.next()) return rs.getInt(1);
+        } catch (SQLException e) { e.printStackTrace(); }
+        return -1;
+    }
+    public static void updateKaisetsu(int id, String k) {
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:C:/Users/user/Desktop/unko.db")) {
+            PreparedStatement pstmt = conn.prepareStatement("UPDATE unko SET KAISETU = ? WHERE id = ?");
+            pstmt.setString(1, k);
+            pstmt.setInt(2, id);
+            pstmt.executeUpdate();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
 }
