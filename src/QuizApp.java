@@ -6,13 +6,9 @@ import java.util.ArrayList;
 import java.awt.datatransfer.*;
 import java.awt.Toolkit;
 
-import com.sun.net.httpserver.*;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-
 class Question {
     String mondai, kaisetsu, seikai;
+
     Question(String mondai, String kaisetsu, String seikai) {
         this.mondai = mondai;
         this.kaisetsu = kaisetsu;
@@ -24,51 +20,15 @@ public class QuizApp {
     static List<Question> questionList;
     static int currentIndex = 0;
     static JLabel statusLabel = new JLabel();
-    static int lastInsertedId = -1;
 
     public static void main(String[] args) throws Exception {
-        //----------------------------
-        System.out.println("サーバー起動中...");
-        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
-        server.createContext("/add", exchange -> {
-            // Chromeから送られてきたデータ(JSON)を読み取る
-            byte[] bytes = exchange.getRequestBody().readAllBytes();
-            String json = new String(bytes);
 
-            // 簡易的に「選択したテキスト」だけを抽出するロジック
-            String text = json.split("\"text\":\"")[1].split("\"}")[0];
-            String type = json.split("\"type\":\"")[1].split("\"")[0];
-
-            //---------------------------------------
-            if ("regMondai".equals(type)) {
-                lastInsertedId = insertMondai(text); // ここでIDを保存！
-                showAutoClosingDialog("問題をセットしました");
-            } else {
-                updateKaisetsu(lastInsertedId, text); // 覚えていたIDを更新！
-                questionList = getAllQuestions(); // DB更新後に再読み込み
-                showAutoClosingDialog("解説を保存しました！");
-            }
-            //-------------------------------
-
-            String response = "OK";
-            exchange.sendResponseHeaders(200, response.length());
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(response.getBytes());
-            }
-        });
-
-
-        //-----------------------------------
-        server.start();
-
-        //-------------------------
         questionList = getAllQuestions();
         createFloatingPalette();
 
         JFrame frame = new JFrame("最強の問題学習ツール");
         JTabbedPane tabbedPane = new JTabbedPane();
         tabbedPane.addTab("試験モード", createQuizPanel(frame));
-        tabbedPane.addTab("問題登録", createRegistrationPanel());
         frame.add(tabbedPane);
         frame.setSize(700, 600);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -80,7 +40,9 @@ public class QuizApp {
             PreparedStatement pstmt = conn.prepareStatement("DELETE FROM unko WHERE id = ?");
             pstmt.setInt(1, id);
             pstmt.executeUpdate();
-        } catch (SQLException e) { e.printStackTrace(); }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
     }
 
 
@@ -125,7 +87,9 @@ public class QuizApp {
             showAutoClosingDialog("保存完了！(正解:" + seikaiValue + ")");
         });
 
-        palette.add(btnM); palette.add(cbS); palette.add(btnK);
+        palette.add(btnM);
+        palette.add(cbS);
+        palette.add(btnK);
         palette.pack();
         palette.setLocation(100, 100);
         palette.setVisible(true);
@@ -134,12 +98,14 @@ public class QuizApp {
     public static String getClipboardText() {
         try {
             return (String) Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor);
-        } catch (Exception e) { return ""; }
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     // --- 試験モード ---
     public static JPanel createQuizPanel(JFrame frame) {
-        JPanel panel = new JPanel(new BorderLayout(50,5));
+        JPanel panel = new JPanel(new BorderLayout(50, 5));
         panel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
 
         JTextArea area = new JTextArea();
@@ -189,11 +155,25 @@ public class QuizApp {
             else kaisetsuArea.setText("不正解！ \n解説: " + q.kaisetsu);//正解は「" + q.seikai + "」です。
         });
 
-        prevBtn.addActionListener(e -> { if (currentIndex > 0) { currentIndex--; updateText.run(); } });
-        nextBtn.addActionListener(e -> { if (currentIndex < questionList.size() - 1) { currentIndex++; updateText.run(); } });
+        prevBtn.addActionListener(e -> {
+            if (currentIndex > 0) {
+                currentIndex--;
+                updateText.run();
+            }
+        });
+        nextBtn.addActionListener(e -> {
+            if (currentIndex < questionList.size() - 1) {
+                currentIndex++;
+                updateText.run();
+            }
+        });
 
         JPanel btnPanel = new JPanel();
-        btnPanel.add(statusLabel); btnPanel.add(prevBtn); btnPanel.add(btn1); btnPanel.add(btn2); btnPanel.add(nextBtn);
+        btnPanel.add(statusLabel);
+        btnPanel.add(prevBtn);
+        btnPanel.add(btn1);
+        btnPanel.add(btn2);
+        btnPanel.add(nextBtn);
 
         JPanel southContainer = new JPanel(new BorderLayout());
         southContainer.add(new JScrollPane(kaisetsuArea), BorderLayout.CENTER);
@@ -204,29 +184,16 @@ public class QuizApp {
         return panel;
     }
 
-    // --- 問題登録タブ ---
-    public static JPanel createRegistrationPanel() {
-        JPanel panel = new JPanel(new GridLayout(4, 1));
-        JTextField tfM = new JTextField("問題");
-        JTextField tfK = new JTextField("解説");
-        JComboBox<String> cbS = new JComboBox<>(new String[]{"〇", "✖"});
-        JButton btn = new JButton("保存");
-
-        btn.addActionListener(e -> {
-            saveToDB(tfM.getText(), tfK.getText(), (String)cbS.getSelectedItem());
-            questionList = getAllQuestions();
-            showAutoClosingDialog("保存完了！");
-        });
-        panel.add(tfM); panel.add(tfK); panel.add(cbS); panel.add(btn);
-        return panel;
-    }
 
     public static List<Question> getAllQuestions() {
         List<Question> list = new ArrayList<>();
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:C:/Users/user/Desktop/unko.db")) {
             ResultSet rs = conn.createStatement().executeQuery("SELECT MONDAI, KAISETU, SEIKAI FROM unko");
-            while (rs.next()) list.add(new Question(rs.getString("MONDAI"), rs.getString("KAISETU"), rs.getString("SEIKAI")));
-        } catch (SQLException e) { e.printStackTrace(); }
+            while (rs.next())
+                list.add(new Question(rs.getString("MONDAI"), rs.getString("KAISETU"), rs.getString("SEIKAI")));
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
         return list;
     }
 
@@ -237,8 +204,11 @@ public class QuizApp {
             pstmt.setString(2, k);
             pstmt.setString(3, s);
             pstmt.executeUpdate();
-        } catch (SQLException e) { e.printStackTrace(); }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
     }
+
     public static int insertMondai(String m) {
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:C:/Users/user/Desktop/unko.db")) {
             // 問題だけINSERT
@@ -249,16 +219,21 @@ public class QuizApp {
             // 最後に作成されたIDを取得
             ResultSet rs = pstmt.getGeneratedKeys();
             if (rs.next()) return rs.getInt(1);
-        } catch (SQLException e) { e.printStackTrace(); }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
         return -1;
     }
+
     public static void updateKaisetsu(int id, String k) {
         try (Connection conn = DriverManager.getConnection("jdbc:sqlite:C:/Users/user/Desktop/unko.db")) {
             PreparedStatement pstmt = conn.prepareStatement("UPDATE unko SET KAISETU = ? WHERE id = ?");
             pstmt.setString(1, k);
             pstmt.setInt(2, id);
             pstmt.executeUpdate();
-        } catch (SQLException e) { e.printStackTrace(); }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
     }
 
 }
