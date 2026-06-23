@@ -15,6 +15,7 @@ class Question {
         this.kaisetsu = kaisetsu;
         this.seikai = seikai;
         this.type = type;
+
     }
 }
 
